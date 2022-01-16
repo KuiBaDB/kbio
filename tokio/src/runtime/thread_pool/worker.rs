@@ -72,6 +72,8 @@ use crate::util::atomic_cell::AtomicCell;
 use crate::util::FastRand;
 
 use std::cell::RefCell;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::time::Duration;
 
 /// A scheduler worker
@@ -99,7 +101,10 @@ struct Core {
     lifo_slot: Option<Notified>,
 
     /// The worker-local run queue.
-    run_queue: queue::Local<Arc<Shared>>,
+    // run_queue: queue::Local<Arc<Shared>>,
+
+    /// rq
+    rq: BinaryHeap<Reverse<Notified>>,
 
     /// True if the worker is currently searching for more work. Searching
     /// involves attempting to steal from other workers.
@@ -198,7 +203,7 @@ pub(super) fn create(
 
     // Create the local queues
     for i in 0..size {
-        let (steal, run_queue) = queue::local();
+        let (steal, _run_queue) = queue::local();
 
         let park = park.clone();
         let unpark = park.unpark();
@@ -206,10 +211,11 @@ pub(super) fn create(
         cores.push(Box::new(Core {
             tick: 0,
             lifo_slot: None,
-            run_queue,
+            // run_queue,
             is_searching: false,
             is_shutdown: false,
             park: Some(park),
+            rq: BinaryHeap::with_capacity(256 /* LOCAL_QUEUE_CAPACITY */),
             stats: WorkerStatsBatcher::new(i),
             rand: FastRand::new(seed()),
         }));
@@ -443,9 +449,10 @@ impl Context {
                     let task = self.worker.shared.owned.assert_owner(task);
                     task.run();
                 } else {
+                    core.rq.push(Reverse(task));
                     // Not enough budget left to run the LIFO task, push it to
                     // the back of the queue and return.
-                    core.run_queue.push_back(task, self.worker.inject());
+                    // core.run_queue.push_back(task, self.worker.inject());
                     return Ok(core);
                 }
             }
@@ -513,9 +520,9 @@ impl Context {
 
         // If there are tasks available to steal, but this worker is not
         // looking for tasks to steal, notify another worker.
-        if !core.is_searching && core.run_queue.is_stealable() {
-            self.worker.shared.notify_parked();
-        }
+        //if !core.is_searching && core.run_queue.is_stealable() {
+        //    self.worker.shared.notify_parked();
+        // }
 
         core.stats.returned_from_park();
 
@@ -539,7 +546,7 @@ impl Core {
     }
 
     fn next_local_task(&mut self) -> Option<Notified> {
-        self.lifo_slot.take().or_else(|| self.run_queue.pop())
+        self.lifo_slot.take().or_else(|| self.rq.pop().map(|v| v.0))
     }
 
     fn steal_work(&mut self, worker: &Worker) -> Option<Notified> {
@@ -558,14 +565,7 @@ impl Core {
             if i == worker.index {
                 continue;
             }
-
-            let target = &worker.shared.remotes[i];
-            if let Some(task) = target
-                .steal
-                .steal_into(&mut self.run_queue, &mut self.stats)
-            {
-                return Some(task);
-            }
+            todo!()
         }
 
         // Fallback on checking the global queue
@@ -594,7 +594,7 @@ impl Core {
     /// Returns true if the transition happend, false if there is work to do first.
     fn transition_to_parked(&mut self, worker: &Worker) -> bool {
         // Workers should not park if they have work to do
-        if self.lifo_slot.is_some() || self.run_queue.has_tasks() {
+        if self.lifo_slot.is_some() || !self.rq.is_empty() {
             return false;
         }
 
@@ -735,7 +735,9 @@ impl Shared {
         // tasks to be executed. If **not** a yield, then there is more
         // flexibility and the task may go to the front of the queue.
         let should_notify = if is_yield {
-            core.run_queue.push_back(task, &self.inject);
+            // TODO: linux cfs use cfs_rq.skip to implement yield
+            core.rq.push(Reverse(task));
+            // core.run_queue.push_back(task, &self.inject);
             true
         } else {
             // Push to the LIFO slot
@@ -743,7 +745,8 @@ impl Shared {
             let ret = prev.is_some();
 
             if let Some(prev) = prev {
-                core.run_queue.push_back(prev, &self.inject);
+                core.rq.push(Reverse(prev));
+                // core.run_queue.push_back(prev, &self.inject);
             }
 
             core.lifo_slot = Some(task);

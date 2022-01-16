@@ -93,9 +93,11 @@ where
 
         match self.header().state.transition_to_running() {
             TransitionToRunning::Success => {
+                let now = std::time::Instant::now();
                 let waker_ref = waker_ref::<T, S>(self.header());
                 let cx = Context::from_waker(&*waker_ref);
                 let res = poll_future(&self.core().stage, cx);
+                unsafe { self.header().inc_vruntime(now.elapsed()) };
 
                 if res == Poll::Ready(()) {
                     // The future completed. Move on to complete the task.

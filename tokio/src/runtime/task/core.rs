@@ -19,6 +19,7 @@ use crate::util::linked_list;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 /// The task cell. Contains the components of the task.
 ///
@@ -78,6 +79,9 @@ pub(crate) struct Header {
     /// removed from the list.
     pub(super) owner_id: UnsafeCell<u64>,
 
+    /// vruntime,
+    pub(crate) vruntime: UnsafeCell<Duration>,
+
     /// The tracing ID for this instrumented task.
     #[cfg(all(tokio_unstable, feature = "tracing"))]
     pub(super) id: Option<tracing::Id>,
@@ -112,6 +116,7 @@ impl<T: Future, S: Schedule> Cell<T, S> {
                 queue_next: UnsafeCell::new(None),
                 vtable: raw::vtable::<T, S>(),
                 owner_id: UnsafeCell::new(0),
+                vruntime: UnsafeCell::new(Duration::from_secs(0)),
                 #[cfg(all(tokio_unstable, feature = "tracing"))]
                 id,
             },
@@ -235,6 +240,14 @@ impl Header {
         // safety: If there are concurrent writes, then that write has violated
         // the safety requirements on `set_owner_id`.
         unsafe { self.owner_id.with(|ptr| *ptr) }
+    }
+
+    pub(crate) fn get_vruntime(&self) -> Duration {
+        unsafe { self.vruntime.with(|ptr| *ptr) }
+    }
+
+    pub(crate) unsafe fn inc_vruntime(&self, d: Duration) {
+        self.vruntime.with_mut(|ptr| *ptr += d)
     }
 }
 

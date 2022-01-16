@@ -169,6 +169,7 @@ mod waker;
 use crate::future::Future;
 use crate::util::linked_list;
 
+use std::cmp::{Eq, Ord, PartialEq, PartialOrd};
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::{fmt, mem};
@@ -186,6 +187,35 @@ unsafe impl<S> Sync for Task<S> {}
 /// A task was notified.
 #[repr(transparent)]
 pub(crate) struct Notified<S: 'static>(Task<S>);
+
+impl<S: Schedule> PartialEq for Notified<S> {
+    fn eq(&self, other: &Self) -> bool {
+        return self
+            .header()
+            .get_vruntime()
+            .eq(&other.header().get_vruntime());
+    }
+}
+
+impl<S: Schedule> Eq for Notified<S> {}
+
+impl<S: Schedule> PartialOrd for Notified<S> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        return self
+            .header()
+            .get_vruntime()
+            .partial_cmp(&other.header().get_vruntime());
+    }
+}
+
+impl<S: Schedule> Ord for Notified<S> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        return self
+            .header()
+            .get_vruntime()
+            .cmp(&other.header().get_vruntime());
+    }
+}
 
 // safety: This type cannot be used to touch the task without first verifying
 // that the value is on a thread where it is safe to poll the task.
