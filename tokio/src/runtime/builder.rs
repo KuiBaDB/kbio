@@ -78,6 +78,12 @@ pub struct Builder {
 
     /// Customizable keep alive timeout for BlockingPool
     pub(super) keep_alive: Option<Duration>,
+
+    #[cfg_attr(not(feature = "kbio"), allow(dead_code))]
+    pub(crate) uring_entries: u32,
+    // None, 意味着不启用 sq poll,
+    #[cfg_attr(not(feature = "kbio"), allow(dead_code))]
+    pub(crate) uring_sq_thread_idle: Option<u32>,
 }
 
 pub(crate) type ThreadNameFn = std::sync::Arc<dyn Fn() -> String + Send + Sync + 'static>;
@@ -145,6 +151,8 @@ impl Builder {
             after_unpark: None,
 
             keep_alive: None,
+            uring_entries: 4096,
+            uring_sq_thread_idle: None,
         }
     }
 
@@ -519,6 +527,18 @@ impl Builder {
         }
     }
 
+    /// uring_entries
+    pub fn uring_entries(&mut self, val: u32) -> &mut Self {
+        self.uring_entries = val;
+        self
+    }
+
+    /// IORING_SETUP_SQPOLL, sq_thread_idle, milliseconds
+    pub fn uring_sq_thread_idle(&mut self, val: u32) -> &mut Self {
+        self.uring_sq_thread_idle = Some(val);
+        self
+    }
+
     fn get_cfg(&self) -> driver::Cfg {
         driver::Cfg {
             enable_pause_time: match self.kind {
@@ -529,6 +549,8 @@ impl Builder {
             enable_io: self.enable_io,
             enable_time: self.enable_time,
             start_paused: self.start_paused,
+            uring_entries: self.uring_entries,
+            uring_sq_thread_idle: self.uring_sq_thread_idle,
         }
     }
 
@@ -557,7 +579,7 @@ impl Builder {
     fn build_basic_runtime(&mut self) -> io::Result<Runtime> {
         use crate::runtime::{BasicScheduler, HandleInner, Kind};
 
-        let (driver, resources) = driver::Driver::new(self.get_cfg())?;
+        let (driver, resources) = driver::Driver::new(&mut self.get_cfg())?;
 
         // Blocking pool
         let blocking_pool = blocking::create_blocking_pool(self, self.max_blocking_threads);
@@ -591,27 +613,26 @@ impl Builder {
     }
 }
 
-cfg_io_driver! {
-    impl Builder {
-        /// Enables the I/O driver.
-        ///
-        /// Doing this enables using net, process, signal, and some I/O types on
-        /// the runtime.
-        ///
-        /// # Examples
-        ///
-        /// ```
-        /// use tokio::runtime;
-        ///
-        /// let rt = runtime::Builder::new_multi_thread()
-        ///     .enable_io()
-        ///     .build()
-        ///     .unwrap();
-        /// ```
-        pub fn enable_io(&mut self) -> &mut Self {
-            self.enable_io = true;
-            self
-        }
+impl Builder {
+    /// Enables the I/O driver.
+    ///
+    /// Doing this enables using net, process, signal, and some I/O types on
+    /// the runtime.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tokio::runtime;
+    ///
+    /// let rt = runtime::Builder::new_multi_thread()
+    ///     .enable_io()
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    #[cfg(any(feature = "net", feature = "process", all(unix, feature = "signal")))]
+    pub fn enable_io(&mut self) -> &mut Self {
+        self.enable_io = true;
+        self
     }
 }
 
@@ -671,7 +692,16 @@ cfg_rt_multi_thread! {
 
             let core_threads = self.worker_threads.unwrap_or_else(num_cpus);
 
-            let (driver, resources) = driver::Driver::new(self.get_cfg())?;
+            let drivers = {
+                let mut drivers = vec![];
+                drivers.reserve(core_threads);
+                let mut cfg = self.get_cfg();
+                for _ in 0..core_threads {
+                    drivers.push(driver::Driver::new(&mut cfg)?);
+                }
+                drivers
+            };
+            let resources = drivers[0].1.clone();
 
             // Create the blocking pool
             let blocking_pool = blocking::create_blocking_pool(self, self.max_blocking_threads + core_threads);
@@ -685,7 +715,7 @@ cfg_rt_multi_thread! {
                 blocking_spawner,
             };
 
-            let (scheduler, launch) = ThreadPool::new(core_threads, driver, handle_inner, self.before_park.clone(), self.after_unpark.clone());
+            let (scheduler, launch) = ThreadPool::new(drivers, handle_inner, self.before_park.clone(), self.after_unpark.clone());
             let spawner = Spawner::ThreadPool(scheduler.spawner().clone());
 
             // Create the runtime handle

@@ -254,6 +254,7 @@ cfg_io_readiness! {
     }
 
     impl<T: Link> LinkedList<T, T::Target> {
+        #[cfg_attr(feature = "kbio", allow(dead_code))]
         pub(crate) fn drain_filter<F>(&mut self, filter: F) -> DrainFilter<'_, T, F>
         where
             F: FnMut(&mut T::Target) -> bool,

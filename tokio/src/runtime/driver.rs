@@ -12,8 +12,9 @@ cfg_io_driver! {
     type IoStack = crate::park::either::Either<ProcessDriver, ParkThread>;
     pub(crate) type IoHandle = Option<crate::io::driver::Handle>;
 
-    fn create_io_stack(enabled: bool) -> io::Result<(IoStack, IoHandle, SignalHandle)> {
+    fn create_io_stack(cfg: &mut Cfg) -> io::Result<(IoStack, IoHandle, SignalHandle)> {
         use crate::park::either::Either;
+        let enabled = cfg.enable_io;
 
         #[cfg(loom)]
         assert!(!enabled);
@@ -34,11 +35,36 @@ cfg_io_driver! {
     }
 }
 
+cfg_kbio_driver! {
+    type IoDriver = crate::io::kbio::driver::Driver;
+    type IoStack = crate::park::either::Either<ProcessDriver, ParkThread>;
+    pub(crate) type IoHandle = Option<crate::io::kbio::driver::Handle>;
+
+    fn create_io_stack(cfg: &mut Cfg) -> io::Result<(IoStack, IoHandle, SignalHandle)> {
+        use crate::park::either::Either;
+        let enabled = cfg.enable_io;
+
+        let ret = if enabled {
+            let io_driver = crate::io::kbio::driver::Driver::new(cfg.uring_entries, cfg.uring_sq_thread_idle)?;
+            let io_handle = io_driver.handle();
+
+            let (signal_driver, signal_handle) = create_signal_driver(io_driver)?;
+            let process_driver = create_process_driver(signal_driver);
+
+            (Either::A(process_driver), Some(io_handle), signal_handle)
+        } else {
+            (Either::B(ParkThread::new()), Default::default(), Default::default())
+        };
+
+        Ok(ret)
+    }
+}
+
 cfg_not_io_driver! {
     pub(crate) type IoHandle = ();
     type IoStack = ParkThread;
 
-    fn create_io_stack(_enabled: bool) -> io::Result<(IoStack, IoHandle, SignalHandle)> {
+    fn create_io_stack(cfg: &mut Cfg) -> io::Result<(IoStack, IoHandle, SignalHandle)> {
         Ok((ParkThread::new(), Default::default(), Default::default()))
     }
 }
@@ -66,12 +92,12 @@ cfg_signal_internal_and_unix! {
 cfg_not_signal_internal! {
     pub(crate) type SignalHandle = ();
 
-    cfg_io_driver! {
-        type SignalDriver = IoDriver;
+    #[cfg(any(feature = "net", feature = "process", all(unix, feature = "signal")))]
+    type SignalDriver = IoDriver;
 
-        fn create_signal_driver(io_driver: IoDriver) -> io::Result<(SignalDriver, SignalHandle)> {
-            Ok((io_driver, ()))
-        }
+    #[cfg(any(feature = "net", feature = "process", all(unix, feature = "signal")))]
+    fn create_signal_driver(io_driver: IoDriver) -> io::Result<(SignalDriver, SignalHandle)> {
+        Ok((io_driver, ()))
     }
 }
 
@@ -86,12 +112,12 @@ cfg_process_driver! {
 }
 
 cfg_not_process_driver! {
-    cfg_io_driver! {
-        type ProcessDriver = SignalDriver;
+    #[cfg(any(feature = "net", feature = "process", all(unix, feature = "signal")))]
+    type ProcessDriver = SignalDriver;
 
-        fn create_process_driver(signal_driver: SignalDriver) -> ProcessDriver {
-            signal_driver
-        }
+    #[cfg(any(feature = "net", feature = "process", all(unix, feature = "signal")))]
+    fn create_process_driver(signal_driver: SignalDriver) -> ProcessDriver {
+        signal_driver
     }
 }
 
@@ -151,6 +177,7 @@ pub(crate) struct Driver {
     inner: TimeDriver,
 }
 
+#[derive(Clone)]
 pub(crate) struct Resources {
     pub(crate) io_handle: IoHandle,
     pub(crate) signal_handle: SignalHandle,
@@ -163,11 +190,17 @@ pub(crate) struct Cfg {
     pub(crate) enable_time: bool,
     pub(crate) enable_pause_time: bool,
     pub(crate) start_paused: bool,
+
+    #[cfg_attr(not(feature = "kbio"), allow(dead_code))]
+    pub(crate) uring_entries: u32,
+    // None, 意味着不启用 sq poll,
+    #[cfg_attr(not(feature = "kbio"), allow(dead_code))]
+    pub(crate) uring_sq_thread_idle: Option<u32>,
 }
 
 impl Driver {
-    pub(crate) fn new(cfg: Cfg) -> io::Result<(Self, Resources)> {
-        let (io_stack, io_handle, signal_handle) = create_io_stack(cfg.enable_io)?;
+    pub(crate) fn new(cfg: &mut Cfg) -> io::Result<(Self, Resources)> {
+        let (io_stack, io_handle, signal_handle) = create_io_stack(cfg)?;
 
         let clock = create_clock(cfg.enable_pause_time, cfg.start_paused);
 

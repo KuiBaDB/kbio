@@ -226,7 +226,7 @@ cfg_aio! {
     }
 }
 
-cfg_net_unix! {
+cfg_notkbio_net_unix! {
     mod async_fd;
 
     pub mod unix {
@@ -273,4 +273,8 @@ cfg_io_blocking! {
         pub(crate) use crate::blocking::spawn_blocking as run;
         pub(crate) use crate::blocking::JoinHandle as Blocking;
     }
+}
+
+cfg_kbio_driver_impl! {
+    pub(crate) mod kbio;
 }

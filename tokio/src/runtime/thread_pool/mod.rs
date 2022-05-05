@@ -3,17 +3,16 @@
 mod idle;
 use self::idle::Idle;
 
-mod park;
-pub(crate) use park::{Parker, Unparker};
-
 pub(super) mod queue;
 
 mod worker;
 pub(crate) use worker::Launch;
 
 pub(crate) use worker::block_in_place;
+pub(crate) use worker::{current_worker_io_handle, current_worker_time_handle};
 
 use crate::loom::sync::Arc;
+use crate::runtime::driver::Resources;
 use crate::runtime::task::{self, JoinHandle};
 use crate::runtime::{Callback, Driver, HandleInner};
 
@@ -46,15 +45,12 @@ pub(crate) struct Spawner {
 
 impl ThreadPool {
     pub(crate) fn new(
-        size: usize,
-        driver: Driver,
+        drivers: Vec<(Driver, Resources)>,
         handle_inner: HandleInner,
         before_park: Option<Callback>,
         after_unpark: Option<Callback>,
     ) -> (ThreadPool, Launch) {
-        let parker = Parker::new(driver);
-        let (shared, launch) =
-            worker::create(size, parker, handle_inner, before_park, after_unpark);
+        let (shared, launch) = worker::create(drivers, handle_inner, before_park, after_unpark);
         let spawner = Spawner { shared };
         let thread_pool = ThreadPool { spawner };
 

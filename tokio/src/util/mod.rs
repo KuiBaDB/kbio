@@ -63,8 +63,6 @@ cfg_rt! {
 cfg_rt_multi_thread! {
     pub(crate) use self::rand::FastRand;
 
-    mod try_lock;
-    pub(crate) use try_lock::TryLock;
 }
 
 pub(crate) mod trace;

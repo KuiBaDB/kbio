@@ -62,9 +62,10 @@ use crate::loom::rand::seed;
 use crate::loom::sync::{Arc, Mutex};
 use crate::park::{Park, Unpark};
 use crate::runtime;
+use crate::runtime::driver::{Driver, IoHandle, Resources, TimeHandle};
 use crate::runtime::enter::EnterContext;
 use crate::runtime::task::{Inject, JoinHandle, OwnedTasks};
-use crate::runtime::thread_pool::{queue, Idle, Parker, Unparker};
+use crate::runtime::thread_pool::{queue, Idle};
 use crate::runtime::{task, Callback, HandleInner, MetricsBatch, SchedulerMetrics, WorkerMetrics};
 use crate::util::atomic_cell::AtomicCell;
 use crate::util::FastRand;
@@ -110,7 +111,7 @@ struct Core {
     ///
     /// Stored in an `Option` as the parker is added / removed to make the
     /// borrow checker happy.
-    park: Option<Parker>,
+    park: Option<Driver>,
 
     /// Batching metrics so they can be submitted to RuntimeMetrics.
     metrics: MetricsBatch,
@@ -163,7 +164,10 @@ struct Remote {
     steal: queue::Steal<Arc<Shared>>,
 
     /// Unparks the associated worker thread
-    unpark: Unparker,
+    unpark: <Driver as Park>::Unpark,
+
+    io_handle: IoHandle,
+    time_handle: TimeHandle,
 }
 
 /// Thread-local context
@@ -192,23 +196,35 @@ type Notified = task::Notified<Arc<Shared>>;
 // Tracks thread-local state
 scoped_thread_local!(static CURRENT: Context);
 
+impl Worker {
+    fn current() -> Option<Arc<Worker>> {
+        CURRENT.with(|maybe_cx| maybe_cx.map(|v| v.worker.clone()))
+    }
+}
+
+pub(crate) fn current_worker_io_handle() -> Option<crate::runtime::driver::IoHandle> {
+    Worker::current().map(|v| return v.shared.remotes[v.index].io_handle.clone())
+}
+
+pub(crate) fn current_worker_time_handle() -> Option<crate::runtime::driver::TimeHandle> {
+    Worker::current().map(|v| return v.shared.remotes[v.index].time_handle.clone())
+}
+
 pub(super) fn create(
-    size: usize,
-    park: Parker,
+    drivers: Vec<(Driver, Resources)>,
     handle_inner: HandleInner,
     before_park: Option<Callback>,
     after_unpark: Option<Callback>,
 ) -> (Arc<Shared>, Launch) {
+    let size = drivers.len();
     let mut cores = Vec::with_capacity(size);
     let mut remotes = Vec::with_capacity(size);
     let mut worker_metrics = Vec::with_capacity(size);
 
     // Create the local queues
-    for _ in 0..size {
+    for (driver, resources) in drivers {
         let (steal, run_queue) = queue::local();
-
-        let park = park.clone();
-        let unpark = park.unpark();
+        let unpark = driver.unpark();
 
         cores.push(Box::new(Core {
             tick: 0,
@@ -216,12 +232,17 @@ pub(super) fn create(
             run_queue,
             is_searching: false,
             is_shutdown: false,
-            park: Some(park),
+            park: Some(driver),
             metrics: MetricsBatch::new(),
             rand: FastRand::new(seed()),
         }));
 
-        remotes.push(Remote { steal, unpark });
+        remotes.push(Remote {
+            steal,
+            unpark,
+            io_handle: resources.io_handle,
+            time_handle: resources.time_handle,
+        });
         worker_metrics.push(WorkerMetrics::new());
     }
 

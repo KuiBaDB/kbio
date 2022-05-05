@@ -76,16 +76,16 @@ macro_rules! cfg_io_blocking {
 macro_rules! cfg_io_driver {
     ($($item:item)*) => {
         $(
-            #[cfg(any(
+            #[cfg(all(any(
                 feature = "net",
                 feature = "process",
                 all(unix, feature = "signal"),
-            ))]
-            #[cfg_attr(docsrs, doc(cfg(any(
+            ), not(feature = "kbio")))]
+            #[cfg_attr(docsrs, doc(cfg(all(any(
                 feature = "net",
                 feature = "process",
                 all(unix, feature = "signal"),
-            ))))]
+            ), not(feature = "kbio")))))]
             $item
         )*
     }
@@ -94,11 +94,55 @@ macro_rules! cfg_io_driver {
 macro_rules! cfg_io_driver_impl {
     ( $( $item:item )* ) => {
         $(
-            #[cfg(any(
+            #[cfg(all(any(
                 feature = "net",
                 feature = "process",
                 all(unix, feature = "signal"),
-            ))]
+            ), not(feature = "kbio")))]
+            $item
+        )*
+    }
+}
+
+macro_rules! cfg_kbio_driver {
+    ( $( $item:item )* ) => {
+        $(
+            #[cfg(all(any(
+                feature = "net",
+                feature = "process",
+                all(unix, feature = "signal"),
+            ), feature = "kbio"))]
+            #[cfg_attr(docsrs, doc(cfg(all(any(
+                feature = "net",
+                feature = "process",
+                all(unix, feature = "signal"),
+            ), feature = "kbio"))))]
+            $item
+        )*
+    }
+}
+
+macro_rules! cfg_kbio_driver_impl {
+    ( $( $item:item )* ) => {
+        $(
+            #[cfg(all(any(
+                feature = "net",
+                feature = "process",
+                all(unix, feature = "signal"),
+            ), feature = "kbio"))]
+            $item
+        )*
+    }
+}
+
+macro_rules! cfg_not_kbio_driver {
+    ( $( $item:item )* ) => {
+        $(
+            #[cfg(not(all(any(
+                feature = "net",
+                feature = "process",
+                all(unix, feature = "signal"),
+            ), feature = "kbio")))]
             $item
         )*
     }
@@ -216,6 +260,46 @@ macro_rules! cfg_net_unix {
         $(
             #[cfg(all(unix, feature = "net"))]
             #[cfg_attr(docsrs, doc(cfg(all(unix, feature = "net"))))]
+            $item
+        )*
+    }
+}
+
+macro_rules! cfg_notkbio_net {
+    ($($item:item)*) => {
+        $(
+            #[cfg(all(feature = "net", not(feature="kbio")))]
+            #[cfg_attr(docsrs, doc(cfg(all(feature = "net", not(feature="kbio")))))]
+            $item
+        )*
+    }
+}
+
+macro_rules! cfg_notkbio_net_unix {
+    ($($item:item)*) => {
+        $(
+            #[cfg(all(unix, feature = "net", not(feature="kbio")))]
+            #[cfg_attr(docsrs, doc(cfg(all(unix, feature = "net", not(feature="kbio")))))]
+            $item
+        )*
+    }
+}
+
+macro_rules! cfg_kbio_net {
+    ($($item:item)*) => {
+        $(
+            #[cfg(all(feature = "kbio", feature = "net"))]
+            #[cfg_attr(docsrs, doc(cfg(all(feature = "kbio", feature = "net"))))]
+            $item
+        )*
+    }
+}
+
+macro_rules! cfg_kbio_net_unix {
+    ($($item:item)*) => {
+        $(
+            #[cfg(all(unix, feature = "kbio", feature = "net"))]
+            #[cfg_attr(docsrs, doc(cfg(all(unix, feature = "kbio", feature = "net"))))]
             $item
         )*
     }

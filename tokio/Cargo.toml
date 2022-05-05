@@ -33,14 +33,17 @@ full = [
   "macros",
   "net",
   "parking_lot",
-  "process",
   "rt",
   "rt-multi-thread",
-  "signal",
   "sync",
   "time",
+  "kbio",
 ]
 
+kbio = [
+  "libc",
+  "parking_lot",
+]
 fs = []
 io-util = ["memchr", "bytes"]
 # stdin, stdout, stderr

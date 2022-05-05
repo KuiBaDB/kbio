@@ -1,6 +1,7 @@
 //! Thread local runtime context
 use crate::runtime::{Handle, TryCurrentError};
 
+use crate::runtime::thread_pool::{current_worker_io_handle, current_worker_time_handle};
 use std::cell::RefCell;
 
 thread_local! {
@@ -22,15 +23,23 @@ pub(crate) fn current() -> Handle {
     }
 }
 
-cfg_io_driver! {
-    pub(crate) fn io_handle() -> crate::runtime::driver::IoHandle {
-        match CONTEXT.try_with(|ctx| {
-            let ctx = ctx.borrow();
-            ctx.as_ref().expect(crate::util::error::CONTEXT_MISSING_ERROR).as_inner().io_handle.clone()
-        }) {
-            Ok(io_handle) => io_handle,
-            Err(_) => panic!("{}", crate::util::error::THREAD_LOCAL_DESTROYED_ERROR),
-        }
+// bool = true, 意味着返回的是当前线程的 handle. 否则返回的是其他线程的 handle.
+#[cfg(any(feature = "net", feature = "process", all(unix, feature = "signal")))]
+pub(crate) fn io_handle() -> (bool, crate::runtime::driver::IoHandle) {
+    if let Some(handle) = current_worker_io_handle() {
+        return (true, handle);
+    }
+
+    match CONTEXT.try_with(|ctx| {
+        let ctx = ctx.borrow();
+        ctx.as_ref()
+            .expect(crate::util::error::CONTEXT_MISSING_ERROR)
+            .as_inner()
+            .io_handle
+            .clone()
+    }) {
+        Ok(io_handle) => (false, io_handle),
+        Err(_) => panic!("{}", crate::util::error::THREAD_LOCAL_DESTROYED_ERROR),
     }
 }
 
@@ -49,6 +58,10 @@ cfg_signal_internal! {
 
 cfg_time! {
     pub(crate) fn time_handle() -> crate::runtime::driver::TimeHandle {
+        if let Some(handle) = current_worker_time_handle() {
+            return handle;
+        }
+
         match CONTEXT.try_with(|ctx| {
             let ctx = ctx.borrow();
             ctx.as_ref().expect(crate::util::error::CONTEXT_MISSING_ERROR).as_inner().time_handle.clone()
@@ -60,6 +73,7 @@ cfg_time! {
 
     cfg_test_util! {
         pub(crate) fn clock() -> Option<crate::runtime::driver::Clock> {
+            // 这里也应该返回 current_worker_clock() 之类的, 但我懒得改了.
             match CONTEXT.try_with(|ctx| (*ctx.borrow()).as_ref().map(|ctx| ctx.as_inner().clock.clone())) {
                 Ok(clock) => clock,
                 Err(_) => panic!("{}", crate::util::error::THREAD_LOCAL_DESTROYED_ERROR),

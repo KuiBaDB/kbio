@@ -23,14 +23,14 @@
 //! [`UnixDatagram`]: UnixDatagram
 
 mod addr;
-#[cfg(feature = "net")]
-pub(crate) use addr::to_socket_addrs;
 pub use addr::ToSocketAddrs;
-
 cfg_net! {
+    pub(crate) use addr::to_socket_addrs;
     mod lookup_host;
     pub use lookup_host::lookup_host;
+}
 
+cfg_notkbio_net! {
     pub mod tcp;
     pub use tcp::listener::TcpListener;
     pub use tcp::socket::TcpSocket;
@@ -40,7 +40,15 @@ cfg_net! {
     pub use udp::UdpSocket;
 }
 
-cfg_net_unix! {
+cfg_kbio_net! {
+    mod kbio_tcp;
+    mod tinymio;
+
+    pub use kbio_tcp::listener::TcpListener;
+    pub use kbio_tcp::stream::TcpStream;
+}
+
+cfg_notkbio_net_unix! {
     pub mod unix;
     pub use unix::datagram::socket::UnixDatagram;
     pub use unix::listener::UnixListener;
